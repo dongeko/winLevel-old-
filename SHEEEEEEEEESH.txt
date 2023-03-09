@@ -1,0 +1,77 @@
+XLSX = require('xlsx')
+
+Meteor.methods
+
+  nCloseCreditSalesReport: (dateStart, dateEnd) ->
+    if dateStart
+      dateStart = moment(dateStart, 'DD.MM.YYYY').startOf('day').toDate()
+    if dateEnd
+      dateEnd = moment(dateEnd, 'DD.MM.YYYY').endOf('day').toDate()
+
+    query = {
+      paymentSchedule:{$exists:true},
+    }
+
+    if dateStart && dateEnd
+      query['paymentSchedule.payments.date'] = {$gte: dateStart, $lte: dateEnd}
+    else if dateStart
+      query['paymentSchedule.payments.date'] = {$gte: dateStart}
+    else if dateEnd
+      query['paymentSchedule.payments.date'] = {$lte: dateEnd}
+
+    nCCSales = db.nCloseCreditSales.find((query), 
+      {
+        fields: {
+          'clientUin': 1,
+          '_id': 1,
+          'repayment.numberOfCredit': 1,
+          'repayment.initiatorFullName': 1,
+          'repayment.initiatorUin': 1,
+          'paymentSchedule.payments': 1
+        }
+      }
+    ).fetch()
+
+    writtenDown = 0
+    writeError = 0
+    arrayOfSchedules = []
+
+    nCCSales.forEach (credit) ->
+      schedule = credit.paymentSchedule.payments
+      payment = {}
+      payment.uin = credit.clientUin
+      payment.id = credit._id
+      payment.numberOfCredit = credit.repayment.numberOfCredit
+      payment.manager = "#{credit.repayment.initiatorFullName} #{credit.repayment.initiatorUin}"
+
+      schedule?.forEach (payings) ->
+        dateAvailable = false
+        if dateStart && dateEnd
+          if payings.date >= dateStart && payings.date <= dateEnd
+            dateAvailable = true
+        else if dateStart
+          if payings.date >= dateStart
+            dateAvailable = true
+        else if dateEnd
+          if payings.date <= dateEnd
+            dateAvailable = true
+        else 
+          dateAvailable = true
+
+        if dateAvailable
+          payment.datePayment = payings.date
+          payment.pricePayment = payings.price
+          arrayOfSchedules.sort((a, b) -> 
+            dateA = new Date(a.datePayment)
+            dateB = new Date(b.datePayment)
+            dateB - dateA
+          ).push(payment)
+
+    console.log nCCSales.length, 'credits found'
+
+    ws_name = "SheetJS"
+    ws = XLSX.utils.aoa_to_sheet([["ID клиента", "ID дела", "Номер кредита", "Менеджер", "Дата платежа", "Сумма платежа"]])
+    XLSX.utils.sheet_add_json(ws, arrayOfSchedules, {skipHeader: true, origin: "A2"})
+    wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, "Sheet JS")
+    wb
